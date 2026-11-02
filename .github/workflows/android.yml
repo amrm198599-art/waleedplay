@@ -20,7 +20,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y unzip
           
-          # البحث عن أي ملف zip موجود في الـ repository
           ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" ! -path "./.git/*" | head -n 1)
           
           if [ -z "$ZIP_FILE" ]; then
@@ -32,7 +31,6 @@ jobs:
           mkdir -p extracted
           unzip -o "$ZIP_FILE" -d extracted
 
-          # البحث عن ملف package.json وتحديد مجلد المشروع
           PACKAGE_JSON=$(find extracted -type f -name "package.json" ! -path "*/node_modules/*" | head -n 1)
           
           if [ -z "$PACKAGE_JSON" ]; then
@@ -44,11 +42,45 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
           echo "Project directory identified as: $PROJECT_DIR"
 
-      - name: Install Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
 
       - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
         run: npm install
+
+      - name: Build Web App / Capacitor / Cordova (if needed)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          # لو المشروع فيه أمر بيلد (زي npm run build) هيشتغل هنا
+          if npm run | grep -q "build"; then
+            npm run build
+          fi
+
+      - name: Set up JDK (for Android build)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build Android APK (if Android folder exists)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ -d "android" ]; then
+            cd android
+            chmod +x gradlew
+            ./gradlew assembleDebug
+            echo "Android APK build completed!"
+          else
+            echo "No 'android' folder found, skipping native Gradle build."
+          fi
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: |
+            **/build/outputs/apk/debug/*.apk
+            **/*.apk
