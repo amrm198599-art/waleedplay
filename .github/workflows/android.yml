@@ -1,51 +1,20 @@
-name: Extract ZIP and Build Android
-
-on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Download repository
-        uses: actions/checkout@v4
-
       - name: Extract project ZIP
         run: |
-          sudo apt-get update
           sudo apt-get install -y unzip
 
-          mkdir -p extracted
-          unzip -o waleed-play-android-fixed.zip -d extracted
+          ZIP_FILE=$(find . -type f -iname "*.zip" \
+            -not -path "./.git/*" \
+            -print -quit)
 
-          echo "Project files:"
-          ls -la extracted
-
-      - name: Find package.json
-        run: |
-          PACKAGE_DIR=$(find extracted -name package.json -type f \
-            -not -path "*/node_modules/*" \
-            -print -quit | xargs dirname)
-
-          if [ -z "$PACKAGE_DIR" ]; then
-            echo "ERROR: package.json not found"
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found in repository"
             exit 1
           fi
 
-          echo "PROJECT_DIR=$PACKAGE_DIR" >> "$GITHUB_ENV"
-          echo "Project directory: $PACKAGE_DIR"
+          echo "Found ZIP: $ZIP_FILE"
 
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+          mkdir -p extracted
+          unzip -o "$ZIP_FILE" -d extracted
 
-      - name: Install dependencies
-        run: npm install
-        working-directory: ./extracted
-
-      - name: Show extracted files
-        run: ls -la "$PROJECT_DIR"
+          echo "Extracted files:"
+          ls -la extracted
