@@ -1,15 +1,20 @@
-name: Build Android (APK + AAB)
+name: Android
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  KS_PATH: ${{ github.workspace }}/keystore/release.jks
+  KS_PASSWORD: '123qweQWE@#$_&-'
+  KEY_PASSWORD: '123qweQWE@#$_&-'
+  KEY_ALIAS: mykey
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,25 +38,34 @@ jobs:
       - name: Apply app icon
         run: cp -r resources/android/res/. android/app/src/main/res/
 
-      - name: Decode keystore
-        if: env.HAS_KEYSTORE == 'true'
+      - name: Create keystore if missing
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
-          echo "KS_PATH=$RUNNER_TEMP/release.jks" >> $GITHUB_ENV
-          echo "KS_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
-          echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> $GITHUB_ENV
-          echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_ENV
+          if [ ! -f keystore/release.jks ]; then
+            mkdir -p keystore
+            keytool -genkeypair -v -keystore keystore/release.jks \
+              -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KS_PASSWORD" -keypass "$KEY_PASSWORD" \
+              -dname "CN=Waleed Play, O=Waleed, C=EG"
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+            git add -f keystore/release.jks
+            git commit -m "Add release keystore"
+            git push
+          fi
 
-      - name: Patch version code and signing
+      - name: Patch gradle (version code + signing)
         run: python3 scripts/patch-gradle.py
 
-      - name: Build debug APK
+      - name: Build APK + AAB
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug assembleRelease bundleRelease
 
-      - name: Build signed release APK + AAB
-        if: env.HAS_KEYSTORE == 'true'
-        working-directory: android
-        run: ./gradle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: waleed-play
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/bundle/release/*.aab
