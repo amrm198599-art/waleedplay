@@ -51,10 +51,9 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: npm install
 
-      - name: Build Web App / Capacitor / Cordova (if needed)
+      - name: Build Web App (if applicable)
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          # لو المشروع فيه أمر بيلد (زي npm run build) هيشتغل هنا
           if npm run | grep -q "build"; then
             npm run build
           fi
@@ -65,16 +64,16 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build Android APK (if Android folder exists)
+      - name: Build Android APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           if [ -d "android" ]; then
             cd android
             chmod +x gradlew
             ./gradlew assembleDebug
-            echo "Android APK build completed!"
+            echo "Android APK build completed successfully!"
           else
-            echo "No 'android' folder found, skipping native Gradle build."
+            echo "No 'android' folder found in the project root."
           fi
 
       - name: Upload APK Artifact
@@ -82,5 +81,7 @@ jobs:
         with:
           name: app-debug-apk
           path: |
-            **/build/outputs/apk/debug/*.apk
+            **/build/outputs/apk/**/*.apk
             **/*.apk
+            extracted/**/*.apk
+          if-no-files-found: ignore
