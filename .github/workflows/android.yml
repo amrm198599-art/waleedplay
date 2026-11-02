@@ -45,7 +45,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
@@ -60,12 +60,10 @@ jobs:
       - name: Build Web Assets & Setup Capacitor Android
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          # بناء أصول الويب إذا كان محددًا في package.json
           if npm run | grep -q "build"; then
             npm run build
           fi
 
-          # إضافة منصة الأندرويد إذا لم تكن موجودة ومزامنة الملفات
           npx @capacitor/cli add android || true
           npx @capacitor/cli sync android
 
