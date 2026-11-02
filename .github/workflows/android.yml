@@ -1,4 +1,4 @@
-name: Extract ZIP and Build Android
+name: Extract ZIP and Build Android APK
 
 on:
   workflow_dispatch:
@@ -51,29 +51,35 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: npm install
 
-      - name: Build Web App (if applicable)
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          if npm run | grep -q "build"; then
-            npm run build
-          fi
-
-      - name: Set up JDK (for Android build)
+      - name: Set up Java JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build Android APK
+      - name: Build Web Assets & Setup Capacitor Android
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          # بناء أصول الويب إذا كان محددًا في package.json
+          if npm run | grep -q "build"; then
+            npm run build
+          fi
+
+          # إضافة منصة الأندرويد إذا لم تكن موجودة ومزامنة الملفات
+          npx @capacitor/cli add android || true
+          npx @capacitor/cli sync android
+
+      - name: Build Android APK via Gradle
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           if [ -d "android" ]; then
             cd android
             chmod +x gradlew
             ./gradlew assembleDebug
-            echo "Android APK build completed successfully!"
+            echo "Android APK built successfully!"
           else
-            echo "No 'android' folder found in the project root."
+            echo "ERROR: Android platform directory was not generated."
+            exit 1
           fi
 
       - name: Upload APK Artifact
@@ -81,7 +87,5 @@ jobs:
         with:
           name: app-debug-apk
           path: |
-            **/build/outputs/apk/**/*.apk
-            **/*.apk
-            extracted/**/*.apk
-          if-no-files-found: ignore
+            ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/*.apk
+            **/build/outputs/apk/debug/*.apk
