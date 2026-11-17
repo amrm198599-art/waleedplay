@@ -19,25 +19,31 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip
-          
-          ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" ! -path "./.git/*" | head -n 1)
-          
+
+          echo "ZIP files in repo:"
+          find . -maxdepth 2 -type f -name "*.zip" ! -path "./.git/*"
+
+          # prefer waleedplay-project.zip, otherwise the first zip found
+          ZIP_FILE=$(find . -maxdepth 2 -type f -name "waleedplay-project.zip" ! -path "./.git/*" | head -n 1)
+          if [ -z "$ZIP_FILE" ]; then
+            ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" ! -path "./.git/*" | head -n 1)
+          fi
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: No ZIP file found in repository!"
             exit 1
           fi
-          
-          echo "Found ZIP: $ZIP_FILE"
+
+          echo "Using ZIP: $ZIP_FILE"
+          rm -rf extracted
           mkdir -p extracted
           unzip -o "$ZIP_FILE" -d extracted
 
           PACKAGE_JSON=$(find extracted -type f -name "package.json" ! -path "*/node_modules/*" | head -n 1)
-          
           if [ -z "$PACKAGE_JSON" ]; then
             echo "ERROR: package.json not found inside ZIP!"
             exit 1
           fi
-          
+
           PROJECT_DIR=$(dirname "$PACKAGE_JSON")
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
           echo "Project directory identified as: $PROJECT_DIR"
@@ -57,33 +63,99 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Build Web Assets & Setup Capacitor Android
+      - name: Build web assets and add Android platform
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          if npm run | grep -q "build"; then
+          if npm run | grep -q " build"; then
             npm run build
           fi
+          npx cap add android
 
-          npx @capacitor/cli add android || true
-          npx @capacitor/cli sync android
+      # ---------- app icon ----------
+      # Icon source, first one found wins:
+      #   1) app-icon.png in the repo root  (put it next to the zip to change the icon without touching the zip)
+      #   2) assets/icon-only.png inside the project zip
+      #   3) icon-512x512.png inside the project zip
+      - name: Apply custom app icon
+        shell: bash
+        run: |
+          REPO="$GITHUB_WORKSPACE"
+          ICON=""
+          for f in "$REPO/app-icon.png" "$REPO/$PROJECT_DIR/assets/icon-only.png" "$REPO/$PROJECT_DIR/icon-512x512.png"; do
+            if [ -f "$f" ]; then ICON="$f"; break; fi
+          done
+          if [ -z "$ICON" ]; then
+            echo "ERROR: no icon found (add app-icon.png to the repo root)"
+            exit 1
+          fi
+          echo "Icon source: $ICON"
+          RES="$REPO/$PROJECT_DIR/android/app/src/main/res"
+          pip install pillow
+          python3 - "$ICON" "$RES" "#090C14" <<'PY'
+          import os, sys
+          from PIL import Image, ImageDraw
+          icon, res, bg = sys.argv[1], sys.argv[2], sys.argv[3].upper()
+          if not os.path.isdir(res):
+              sys.exit("ERROR: res folder not found: " + res)
+          src = Image.open(icon).convert("RGBA")
+          s = min(src.size)
+          src = src.crop(((src.width - s) // 2, (src.height - s) // 2, (src.width + s) // 2, (src.height + s) // 2))
+          LEGACY = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
+          ADAPT = {"mdpi": 108, "hdpi": 162, "xhdpi": 216, "xxhdpi": 324, "xxxhdpi": 432}
+          def circle(n):
+              m = Image.new("L", (n * 4, n * 4), 0)
+              ImageDraw.Draw(m).ellipse((0, 0, n * 4 - 1, n * 4 - 1), fill=255)
+              return m.resize((n, n), Image.LANCZOS)
+          for d, n in LEGACY.items():
+              folder = os.path.join(res, "mipmap-" + d)
+              os.makedirs(folder, exist_ok=True)
+              flat = src.resize((n, n), Image.LANCZOS)
+              flat.save(os.path.join(folder, "ic_launcher.png"))
+              r = flat.copy(); r.putalpha(circle(n)); r.save(os.path.join(folder, "ic_launcher_round.png"))
+              a = ADAPT[d]; inner = int(a * 0.66)
+              fg = Image.new("RGBA", (a, a), (0, 0, 0, 0))
+              fg.paste(src.resize((inner, inner), Image.LANCZOS), ((a - inner) // 2, (a - inner) // 2))
+              fg.save(os.path.join(folder, "ic_launcher_foreground.png"))
+          anydpi = os.path.join(res, "mipmap-anydpi-v26"); os.makedirs(anydpi, exist_ok=True)
+          xml = ('<?xml version="1.0" encoding="utf-8"?>\n'
+                 '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+                 '  <background android:drawable="@color/ic_launcher_background"/>\n'
+                 '  <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n'
+                 '</adaptive-icon>\n')
+          for n in ("ic_launcher.xml", "ic_launcher_round.xml"):
+              open(os.path.join(anydpi, n), "w").write(xml)
+          vals = os.path.join(res, "values"); os.makedirs(vals, exist_ok=True)
+          open(os.path.join(vals, "ic_launcher_background.xml"), "w").write(
+              '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n  <color name="ic_launcher_background">' + bg + '</color>\n</resources>\n')
+          for old in ("drawable-v24/ic_launcher_foreground.xml", "drawable/ic_launcher_background.xml"):
+              p = os.path.join(res, old)
+              if os.path.exists(p):
+                  os.remove(p); print("removed", old)
+          print("OK: icon applied from", icon)
+          PY
+          echo "--- launcher files ---"
+          find "$RES" -name "ic_launcher*" | sort
+
+      - name: Allow saving to gallery on old Android
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          M=android/app/src/main/AndroidManifest.xml
+          grep -q WRITE_EXTERNAL_STORAGE $M || sed -i 's#</manifest>#    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\n</manifest>#' $M
+
+      - name: Sync Capacitor
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npx cap sync android
 
       - name: Build Android APK via Gradle
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          if [ -d "android" ]; then
-            cd android
-            chmod +x gradlew
-            ./gradlew assembleDebug
-            echo "Android APK built successfully!"
-          else
-            echo "ERROR: Android platform directory was not generated."
-            exit 1
-          fi
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+          echo "Android APK built successfully!"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: |
-            ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/*.apk
-            **/build/outputs/apk/debug/*.apk
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/*.apk
